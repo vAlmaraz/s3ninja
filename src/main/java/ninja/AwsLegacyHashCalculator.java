@@ -68,12 +68,9 @@ public class AwsLegacyHashCalculator {
         stringToSign.append("\n");
         stringToSign.append(ctx.getHeaderValue("Content-Type").asString(""));
         stringToSign.append("\n");
-
-        String date = ctx.get("Expires").asString(
-            ctx.getHeaderValue("Date").asString(""));
-        if (ctx.getHeaderValue("x-amz-date").isNull()) {
-            stringToSign.append(date);
-        }
+        stringToSign.append(ctx.get("Expires")
+                               .asString(ctx.getHeaderValue("x-amz-date")
+                                            .asString(ctx.getHeaderValue("Date").asString(""))));
         stringToSign.append("\n");
 
         HttpHeaders requestHeaders = ctx.getRequest().headers();
@@ -112,7 +109,7 @@ public class AwsLegacyHashCalculator {
     }
 
     private boolean relevantAmazonHeader(final String name) {
-        return name.toLowerCase().startsWith("x-amz-");
+        return name.toLowerCase().startsWith("x-amz-") && !"x-amz-date".equals(name.toLowerCase());
     }
 
     private String toHeaderStringRepresentation(final String headerName, final HttpHeaders requestHeaders) {
