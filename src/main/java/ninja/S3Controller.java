@@ -26,6 +26,7 @@ import sirius.kernel.di.std.Register;
 import sirius.kernel.health.Counter;
 import sirius.kernel.health.Exceptions;
 import sirius.kernel.health.HandledException;
+import sirius.kernel.xml.Attribute;
 import sirius.kernel.xml.XMLReader;
 import sirius.kernel.xml.XMLStructuredOutput;
 import sirius.web.controller.Controller;
@@ -92,6 +93,17 @@ public class S3Controller implements Controller {
                                           .withChronology(IsoChronology.INSTANCE)
                                           .withZone(ZoneOffset.UTC);
 
+    private static final Map<String, String> headerOverrides;
+    static {
+        headerOverrides = Maps.newTreeMap();
+        headerOverrides.put("response-content-type", "Content-Type");
+        headerOverrides.put("response-content-language", "Content-Language");
+        headerOverrides.put("response-expires", "Expires");
+        headerOverrides.put("response-cache-control", "Cache-Control");
+        headerOverrides.put("response-content-disposition", "Content-Disposition");
+        headerOverrides.put("response-content-encoding", "Content-Encoding");
+    }
+
     /**
      * Extracts the given hash from the given request. Returns null if no hash was given.
      */
@@ -139,6 +151,44 @@ public class S3Controller implements Controller {
                 APILog.Result.OK,
                 CallContext.getCurrent().getWatch());
     }
+    
+    /**
+	 * GET a list of all buckets
+	 *
+	 * @param ctx
+	 *            the context describing the current request
+	 */
+	@Routed(value = "/s3", priority = 99)
+	public void listBuckets(WebContext ctx) {
+		HttpMethod method = ctx.getRequest().getMethod();
+
+		if (GET == method) {
+			List<Bucket> buckets = storage.getBuckets();
+			Response response = ctx.respondWith();
+
+			response.setHeader("Content-Type", "application/xml");
+
+			XMLStructuredOutput out = response.xml();
+			out.beginOutput("ListAllMyBucketsResult",
+					Attribute.set("xmlns", "http://s3.amazonaws.com/doc/2006-03-01/"));
+			out.beginObject("Owner");
+			out.property("ID", "initiatorId");
+			out.property("DisplayName", "initiatorName");
+			out.endObject();
+
+			out.beginObject("Buckets");
+			for (Bucket bucket : buckets) {
+				out.beginObject("Bucket");
+				out.property("Name", bucket.getName());
+				out.property("CreationDate", ISO_INSTANT.format(Instant.ofEpochMilli(bucket.getFile().lastModified())));
+				out.endObject();
+			}
+			out.endObject();
+			out.endOutput();
+		} else {
+			throw new IllegalArgumentException(ctx.getRequest().getMethod().name());
+		}
+	}
 
     /**
      * Dispatching method handling bucket specific calls without content (HEAD and DELETE)
@@ -407,7 +457,9 @@ public class S3Controller implements Controller {
         }
 
         object.storeProperties(properties);
-        ctx.respondWith().addHeader(HttpHeaders.Names.ETAG, etag(hash)).status(HttpResponseStatus.OK);
+        Response response = ctx.respondWith();
+        response.addHeader(HttpHeaders.Names.ETAG, etag(hash)).status(HttpResponseStatus.OK);
+        response.addHeader(HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS, "ETag");
         signalObjectSuccess(ctx);
     }
 
@@ -475,8 +527,12 @@ public class S3Controller implements Controller {
         for (Map.Entry<Object, Object> entry : object.getProperties()) {
             response.addHeader(entry.getKey().toString(), entry.getValue().toString());
         }
+        for (Map.Entry<String, String> entry : getOverridenHeaders(ctx).entrySet()) {
+            response.setHeader(entry.getKey(), entry.getValue());
+        }
         HashCode hash = Files.hash(object.getFile(), Hashing.md5());
         response.addHeader(HttpHeaders.Names.ETAG, BaseEncoding.base16().encode(hash.asBytes()));
+        response.addHeader(HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS, "ETag");
         if (sendFile) {
             response.file(object.getFile());
         } else {
@@ -559,6 +615,7 @@ public class S3Controller implements Controller {
 
         Response response = ctx.respondWith();
         response.setHeader("ETag", etag);
+        response.addHeader(HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS, "ETag");
         response.status(HttpResponseStatus.OK);
     }
 
@@ -745,5 +802,17 @@ public class S3Controller implements Controller {
         }
 
         out.endOutput();
+    }
+
+    private Map<String, String> getOverridenHeaders(WebContext ctx) {
+        Map<String, String> overrides = Maps.newTreeMap();
+        for (Map.Entry<String, String> entry : headerOverrides.entrySet()) {
+            String header = entry.getValue().toString();
+            String val = ctx.getParameter(entry.getKey().toString());
+            if (val != null) {
+                overrides.put(header, val);
+            }
+        }
+        return overrides;
     }
 }
